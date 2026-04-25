@@ -1,4 +1,8 @@
 {
+  "name": "IdlixKu Repository",
+  "description": "Film dan Serial subtitle Indonesia",
+  "manifestVersion": 1,
+  "pluginLists": [],
   "plugins": [
     {
       "url": "https://raw.githubusercontent.com/agussumantri050-spec/Test1/builds/IdlixKu.cs3",
@@ -14,7 +18,7 @@
       ],
       "language": "id",
       "iconUrl": "https://z1.idlixku.com/wp-content/uploads/2021/09/cropped-idlix-192x192.png",
-      "description": "Film & Serial subtitle Indonesia dari idlixku.com"
+      "description": "Film dan Serial subtitle Indonesia dari idlixku.com"
     }
   ]
 }
