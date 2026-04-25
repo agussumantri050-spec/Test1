@@ -1,24 +1,19 @@
-{
-  "name": "IdlixKu Repository",
-  "description": "Film dan Serial subtitle Indonesia",
-  "manifestVersion": 1,
-  "pluginLists": [],
-  "plugins": [
-    {
-      "url": "https://raw.githubusercontent.com/agussumantri050-spec/Test1/builds/IdlixKu.cs3",
-      "status": 1,
-      "version": 2,
-      "apiVersion": 13,
-      "name": "IdlixKu",
-      "pluginType": "MainAPI",
-      "tvTypes": [
-        "Movie",
-        "TvSeries",
-        "AsianDrama"
-      ],
-      "language": "id",
-      "iconUrl": "https://z1.idlixku.com/wp-content/uploads/2021/09/cropped-idlix-192x192.png",
-      "description": "Film dan Serial subtitle Indonesia dari idlixku.com"
-    }
-  ]
-}
+[
+  {
+    "url": "https://raw.githubusercontent.com/agussumantri050-spec/Test1/builds/IdlixKu.cs3",
+    "name": "IdlixKu",
+    "internalName": "IdlixKu",
+    "authors": [],
+    "description": "Film dan Serial subtitle Indonesia dari idlixku.com",
+    "repositoryUrl": "https://github.com/agussumantri050-spec/Test1",
+    "tvTypes": [
+      "Movie",
+      "TvSeries",
+      "AsianDrama"
+    ],
+    "iconUrl": "https://www.google.com/s2/favicons?domain=idlixku.com&sz=128",
+    "apiVersion": 1,
+    "version": 2,
+    "status": 1
+  }
+]
