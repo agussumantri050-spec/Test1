@@ -1,0 +1,109 @@
+name: Build
+
+concurrency:
+  group: "build"
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          path: "src"
+
+      - name: Checkout builds branch
+        uses: actions/checkout@v4
+        with:
+          ref: "builds"
+          path: "builds"
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle Wrapper
+        run: |
+          cd $GITHUB_WORKSPACE/src
+          mkdir -p gradle/wrapper
+
+          # Download gradlew dan jar dari phisher98
+          curl -fsSL "https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/gradlew" -o gradlew
+          curl -fsSL "https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/gradle/wrapper/gradle-wrapper.jar" -o gradle/wrapper/gradle-wrapper.jar
+          chmod +x gradlew
+
+          # Hardcode Gradle 8.13 (sesuai requirement AGP 8.13.2)
+          printf 'distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.13-bin.zip\nzipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n' > gradle/wrapper/gradle-wrapper.properties
+
+          echo "=== Verifikasi ==="
+          cat gradle/wrapper/gradle-wrapper.properties
+          head -2 gradlew
+          ls -lh gradle/wrapper/
+
+      - name: Build plugin
+        run: |
+          cd $GITHUB_WORKSPACE/src
+          ./gradlew IdlixKu:make --no-daemon --stacktrace
+
+      - name: Copy .cs3 to builds
+        run: |
+          rm -f $GITHUB_WORKSPACE/builds/*.cs3
+          find $GITHUB_WORKSPACE/src -name "*.cs3" -exec cp {} $GITHUB_WORKSPACE/builds/ \;
+          echo "=== File cs3 ==="
+          ls -lh $GITHUB_WORKSPACE/builds/
+
+      - name: Generate plugins.json
+        run: |
+          python3 << PYEOF
+          import json, os
+          raw_base = "https://raw.githubusercontent.com/${{ github.repository }}/builds"
+          builds   = "${{ github.workspace }}/builds"
+          plugins  = []
+          for f in sorted(os.listdir(builds)):
+              if not f.endswith(".cs3"):
+                  continue
+              plugins.append({
+                  "url"        : f"{raw_base}/{f}",
+                  "status"     : 1,
+                  "version"    : 2,
+                  "apiVersion" : 13,
+                  "name"       : f.replace(".cs3",""),
+                  "pluginType" : "MainAPI",
+                  "tvTypes"    : ["Movie","TvSeries","AsianDrama"],
+                  "language"   : "id",
+                  "iconUrl"    : "https://z1.idlixku.com/wp-content/uploads/2021/09/cropped-idlix-192x192.png",
+                  "description": "Film & Serial subtitle Indonesia dari idlixku.com",
+              })
+          with open(f"{builds}/plugins.json","w") as fp:
+              json.dump({"plugins":plugins}, fp, indent=2, ensure_ascii=False)
+          print(f"OK: {len(plugins)} plugin ditulis")
+          for p in plugins: print(f"  -> {p['name']}")
+          PYEOF
+
+      - name: Verifikasi plugins.json
+        run: cat ${{ github.workspace }}/builds/plugins.json
+
+      - name: Push ke branch builds
+        run: |
+          cd ${{ github.workspace }}/builds
+          git config user.email "actions@github.com"
+          git config user.name  "GitHub Actions"
+          git add -A
+          git diff --cached --quiet && echo "Tidak ada perubahan" && exit 0
+          git commit -m "Build ${{ github.sha }}"
+          git push origin builds
