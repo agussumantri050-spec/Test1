@@ -1,0 +1,8 @@
+{
+  "name": "IdlixKu Repository",
+  "description": "Film dan Serial subtitle Indonesia dari idlixku.com",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/agussumantri050-spec/Test1/builds/plugins.json"
+  ]
+}
