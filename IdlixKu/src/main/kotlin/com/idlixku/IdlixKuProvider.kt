@@ -70,12 +70,13 @@ class IdlixKuProvider : MainAPI() {
                 val href    = li.selectFirst("a")?.attr("href") ?: return@mapNotNull null
                 val epTitle = li.selectFirst("div.episodiotitle a")?.text()
                 val num     = li.selectFirst("div.numerando")?.text()?.split("-")
+                val seasonNum  = num?.getOrNull(0)?.trim()?.toIntOrNull()
+                val episodeNum = num?.getOrNull(1)?.trim()?.toIntOrNull()
                 newEpisode(href) {
-                    this.name    = epTitle
-                    this.season  = num?.getOrNull(0)?.trim()?.toIntOrNull()
-                    this.episode = num?.getOrNull(1)?.trim()?.toIntOrNull()
+                    name    = epTitle
+                    season  = seasonNum
+                    episode = episodeNum
                 }
-                )
             }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
