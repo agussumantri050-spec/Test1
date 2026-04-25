@@ -45,12 +45,11 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/gradle/wrapper/gradle-wrapper.jar" -o gradle/wrapper/gradle-wrapper.jar
           chmod +x gradlew
           printf 'distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.13-bin.zip\nzipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n' > gradle/wrapper/gradle-wrapper.properties
-          cat gradle/wrapper/gradle-wrapper.properties
 
       - name: Build plugin
         run: |
           cd $GITHUB_WORKSPACE/src
-          ./gradlew IdlixKu:make --no-daemon --stacktrace
+          ./gradlew IdlixKu:make --no-daemon
 
       - name: Copy cs3 to builds
         run: |
@@ -58,42 +57,50 @@ jobs:
           find $GITHUB_WORKSPACE/src -name "*.cs3" -exec cp {} $GITHUB_WORKSPACE/builds/ \;
           ls -lh $GITHUB_WORKSPACE/builds/
 
-      - name: Generate plugins.json
+      - name: Generate plugins.json and repo.json
         run: |
           python3 -c "
           import json, os
-          raw_base = 'https://raw.githubusercontent.com/${{ github.repository }}/builds'
+          repo = 'agussumantri050-spec/Test1'
+          raw_base = 'https://raw.githubusercontent.com/' + repo + '/builds'
           builds = '${{ github.workspace }}/builds'
           plugins = []
           for f in sorted(os.listdir(builds)):
               if not f.endswith('.cs3'):
                   continue
+              name = f.replace('.cs3', '')
               plugins.append({
                   'url': raw_base + '/' + f,
-                  'status': 1,
-                  'version': 2,
-                  'apiVersion': 13,
-                  'name': f.replace('.cs3', ''),
-                  'pluginType': 'MainAPI',
-                  'tvTypes': ['Movie', 'TvSeries', 'AsianDrama'],
-                  'language': 'id',
-                  'iconUrl': 'https://z1.idlixku.com/wp-content/uploads/2021/09/cropped-idlix-192x192.png',
+                  'name': name,
+                  'internalName': name,
+                  'authors': [],
                   'description': 'Film dan Serial subtitle Indonesia dari idlixku.com',
+                  'repositoryUrl': 'https://github.com/' + repo,
+                  'tvTypes': ['Movie', 'TvSeries', 'AsianDrama'],
+                  'iconUrl': 'https://www.google.com/s2/favicons?domain=idlixku.com&sz=128',
+                  'apiVersion': 1,
+                  'version': 2,
+                  'status': 1,
               })
-          result = {
-              'name': 'IdlixKu Repository',
-              'description': 'Film dan Serial subtitle Indonesia',
-              'manifestVersion': 1,
-              'pluginLists': [],
-              'plugins': plugins,
-          }
           with open(builds + '/plugins.json', 'w') as fp:
-              json.dump(result, fp, indent=2, ensure_ascii=False)
+              json.dump(plugins, fp, indent=2, ensure_ascii=False)
+          repo_json = {
+              'name': 'IdlixKu Repository',
+              'description': 'Film dan Serial subtitle Indonesia dari idlixku.com',
+              'manifestVersion': 1,
+              'pluginLists': [raw_base + '/plugins.json'],
+          }
+          with open(builds + '/repo.json', 'w') as fp:
+              json.dump(repo_json, fp, indent=2, ensure_ascii=False)
           print('OK: ' + str(len(plugins)) + ' plugin')
           "
 
-      - name: Verifikasi plugins.json
-        run: cat ${{ github.workspace }}/builds/plugins.json
+      - name: Verifikasi
+        run: |
+          echo '=== plugins.json ==='
+          cat ${{ github.workspace }}/builds/plugins.json
+          echo '=== repo.json ==='
+          cat ${{ github.workspace }}/builds/repo.json
 
       - name: Push ke branch builds
         run: |
