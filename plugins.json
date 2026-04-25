@@ -1,0 +1,20 @@
+{
+  "plugins": [
+    {
+      "url": "https://raw.githubusercontent.com/agussumantri050-spec/Test1/builds/IdlixKu.cs3",
+      "status": 1,
+      "version": 2,
+      "apiVersion": 13,
+      "name": "IdlixKu",
+      "pluginType": "MainAPI",
+      "tvTypes": [
+        "Movie",
+        "TvSeries",
+        "AsianDrama"
+      ],
+      "language": "id",
+      "iconUrl": "https://z1.idlixku.com/wp-content/uploads/2021/09/cropped-idlix-192x192.png",
+      "description": "Film & Serial subtitle Indonesia dari idlixku.com"
+    }
+  ]
+}
