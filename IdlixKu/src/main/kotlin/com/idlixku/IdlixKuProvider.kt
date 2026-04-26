@@ -3,6 +3,7 @@ package com.idlixku
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 
 class IdlixKuProvider : MainAPI() {
 
@@ -14,70 +15,117 @@ class IdlixKuProvider : MainAPI() {
     override val supportedTypes     = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
 
     private val ua = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language" to "id-ID,id;q=0.9",
     )
 
+    // Semua kategori diambil dari homepage "/" yang punya SSR penuh
+    // Format: "URL#SECTION_KEYWORD" → keyword dipakai untuk filter h2
     override val mainPage = mainPageOf(
-        "$mainUrl/movie"           to "Film Terbaru",
-        "$mainUrl/series"          to "Serial TV",
-        "$mainUrl/genre/action"    to "Aksi",
-        "$mainUrl/genre/horror"    to "Horor",
-        "$mainUrl/genre/comedy"    to "Komedi",
-        "$mainUrl/genre/romance"   to "Romantis",
-        "$mainUrl/genre/animation" to "Animasi",
-        "$mainUrl/genre/thriller"  to "Thriller",
-        "$mainUrl/genre/drama"     to "Drama",
+        "$mainUrl/#trending"          to "Trending",
+        "$mainUrl/#recently-movies"   to "Film Terbaru",
+        "$mainUrl/#recently-series"   to "Serial TV",
+        "$mainUrl/#network"           to "Network Originals",
+        "$mainUrl/#collections"       to "Koleksi",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page == 1) request.data else "${request.data}?page=$page"
-        val doc = app.get(url, headers = ua).document
-        val list = doc.parseItems()
+        // Semua data dari homepage (satu-satunya yang punya SSR lengkap)
+        val doc     = app.get("$mainUrl/", headers = ua).document
+        val section = request.data.substringAfterLast("#")
+        val list    = doc.extractSection(section)
         return newHomePageResponse(request.name, list)
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/search?q=$query", headers = ua).document
-        return doc.parseItems()
-    }
-
-    // Parse item dari section sr-only yang dirender server-side
-    private fun Document.parseItems(): List<SearchResponse> {
+    // Ekstrak item dari section berdasarkan keyword h2
+    private fun Document.extractSection(keyword: String): List<SearchResponse> {
         val results = mutableListOf<SearchResponse>()
+        val srOnly  = selectFirst("section.sr-only, section[aria-label]") ?: return results
 
-        // Ambil dari section aria-label (SSR content Next.js)
-        val section = selectFirst("section[aria-label]")
-        section?.select("li a")?.forEach { a ->
-            val href  = a.attr("href").trim()
-            val title = a.text().trim()
-            if (href.isEmpty() || title.isEmpty()) return@forEach
-            val fullUrl = if (href.startsWith("http")) href else "$mainUrl$href"
-            val isTV = href.contains("/series/")
-            val res = if (isTV)
-                newTvSeriesSearchResponse(title, fullUrl, TvType.TvSeries)
-            else
-                newMovieSearchResponse(title, fullUrl, TvType.Movie)
-            results.add(res)
+        // Cari h2 yang matching dengan keyword
+        var capture = false
+        srOnly.children().forEach { child ->
+            when {
+                child.tagName() == "h2" -> {
+                    val h2text = child.text().lowercase()
+                    capture = when (keyword) {
+                        "trending"         -> h2text.contains("trending now")
+                        "recently-movies"  -> h2text.contains("recently added movies") || h2text.contains("movie")
+                        "recently-series"  -> h2text.contains("recently added series") || h2text.contains("series")
+                        "network"          -> h2text.contains("network")
+                        "collections"      -> h2text.contains("collection")
+                        else               -> h2text.contains(keyword)
+                    }
+                }
+                child.tagName() == "div" && capture -> {
+                    // Stop di section berikutnya
+                    capture = false
+                }
+                child.tagName() == "ul" && capture -> {
+                    child.select("li a").forEach { a ->
+                        val r = a.toResult() ?: return@forEach
+                        results.add(r)
+                    }
+                }
+            }
         }
 
-        // Fallback: cari dari JSON-LD schema
+        // Fallback: jika tidak ada grouping by h2, ambil semua sesuai type
         if (results.isEmpty()) {
-            select("script[type='application/ld+json']").forEach { script ->
-                val json = script.data()
-                val urlRegex = Regex(""""url"\s*:\s*"(https://z1\.idlixku\.com/(movie|series)/[^"]+)"""")
-                val nameRegex = Regex(""""name"\s*:\s*"([^"]+)"""")
-                val urls  = urlRegex.findAll(json).map { it.groupValues[1] }.toList()
-                val names = nameRegex.findAll(json).map { it.groupValues[1] }.toList()
-                urls.forEachIndexed { i, itemUrl ->
-                    val itemTitle = names.getOrNull(i + 1) ?: return@forEachIndexed
-                    val isTV = itemUrl.contains("/series/")
-                    val res = if (isTV)
-                        newTvSeriesSearchResponse(itemTitle, itemUrl, TvType.TvSeries)
-                    else
-                        newMovieSearchResponse(itemTitle, itemUrl, TvType.Movie)
-                    results.add(res)
+            srOnly.select("li a").forEach { a ->
+                val href = a.attr("href")
+                val matched = when (keyword) {
+                    "recently-movies"  -> href.contains("/movie/")
+                    "recently-series", "trending" -> href.contains("/series/")
+                    else -> href.contains("/movie/") || href.contains("/series/")
+                }
+                if (matched) {
+                    val r = a.toResult() ?: return@forEach
+                    results.add(r)
+                }
+            }
+        }
+
+        return results.distinctBy { it.url }
+    }
+
+    private fun Element.toResult(): SearchResponse? {
+        val href  = attr("href").trim().ifEmpty { return null }
+        val title = text().trim().ifEmpty { return null }
+        val url   = if (href.startsWith("http")) href else "$mainUrl$href"
+        if (!href.contains("/movie/") && !href.contains("/series/")) return null
+        val isTV  = href.contains("/series/")
+        return if (isTV)
+            newTvSeriesSearchResponse(title, url, TvType.TvSeries)
+        else
+            newMovieSearchResponse(title, url, TvType.Movie)
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val doc     = app.get("$mainUrl/search?q=$query", headers = ua).document
+        val results = mutableListOf<SearchResponse>()
+
+        // Coba dari section sr-only
+        doc.select("section.sr-only li a, section[aria-label] li a").forEach { a ->
+            val r = a.toResult() ?: return@forEach
+            results.add(r)
+        }
+
+        // Fallback: JSON-LD
+        if (results.isEmpty()) {
+            doc.select("script[type='application/ld+json']").forEach { script ->
+                val text = script.data()
+                val urlR  = Regex(""""url"\s*:\s*"(https://z1\.idlixku\.com/(?:movie|series)/[^"]+)"""")
+                val nameR = Regex(""""name"\s*:\s*"([^"]+)"""")
+                val urls  = urlR.findAll(text).map { it.groupValues[1] }.toList()
+                val names = nameR.findAll(text).map { it.groupValues[1] }.toList()
+                urls.zip(names).forEach { (u, n) ->
+                    val isTV = u.contains("/series/")
+                    results.add(
+                        if (isTV) newTvSeriesSearchResponse(n, u, TvType.TvSeries)
+                        else newMovieSearchResponse(n, u, TvType.Movie)
+                    )
                 }
             }
         }
@@ -89,52 +137,44 @@ class IdlixKuProvider : MainAPI() {
         val doc   = app.get(url, headers = ua).document
         val isTV  = url.contains("/series/")
 
-        // Ambil data dari JSON-LD
+        // Judul dari JSON-LD, <title>, atau h1
         val jsonLd = doc.select("script[type='application/ld+json']").joinToString("") { it.data() }
-
-        // Title dari JSON-LD atau tag title
-        val title = Regex(""""name"\s*:\s*"([^"]+)"""").find(jsonLd)?.groupValues?.get(1)
+        val title  =
+            Regex(""""name"\s*:\s*"([^"]+)"""").find(jsonLd)?.groupValues?.get(1)
+            ?: doc.selectFirst("h1")?.text()?.trim()
             ?: doc.title().substringBefore(" - ").substringBefore(" | ").trim()
             ?: return null
 
         // Poster dari JSON-LD image
-        val poster = Regex(""""image"\s*:\s*"([^"]+)"""").find(jsonLd)?.groupValues?.get(1)
+        val poster  = Regex(""""image"\s*:\s*"(https://[^"]+)"""").find(jsonLd)?.groupValues?.get(1)
+        val plot    = Regex(""""description"\s*:\s*"([^"]+)"""").find(jsonLd)?.groupValues?.get(1)
+        val year    = Regex("""-(\d{4})(?:/|$)""").find(url)?.groupValues?.get(1)?.toIntOrNull()
 
-        // Description
-        val plot = Regex(""""description"\s*:\s*"([^"]+)"""").find(jsonLd)?.groupValues?.get(1)
-
-        // Year dari URL slug (misal: perfect-crown-2026 → 2026)
-        val year = Regex("""-(\d{4})$""").find(url.trimEnd('/').substringAfterLast("/"))
-            ?.groupValues?.get(1)?.toIntOrNull()
+        // Cari episode dari sr-only
+        val srOnly = doc.selectFirst("section.sr-only, section[aria-label]")
 
         return if (!isTV) {
-            // Movie
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.plot      = plot
                 this.year      = year
             }
         } else {
-            // TV Series - coba ambil episode dari section sr-only
             val episodes = mutableListOf<Episode>()
-            val section  = doc.selectFirst("section[aria-label]")
-            section?.select("li a[href*='/episode/'], li a[href*='/watch/']")?.forEachIndexed { i, a ->
-                val epHref  = a.attr("href")
-                val epTitle = a.text().trim()
-                val fullEpUrl = if (epHref.startsWith("http")) epHref else "$mainUrl$epHref"
-                episodes.add(newEpisode(fullEpUrl) {
-                    name    = epTitle.ifEmpty { "Episode ${i + 1}" }
-                    episode = i + 1
-                })
+            srOnly?.select("li a")?.forEachIndexed { i, a ->
+                val epHref = a.attr("href").trim()
+                if (epHref.contains("/episode/") || epHref.contains("/watch/") || epHref.contains("/series/")) {
+                    val epUrl   = if (epHref.startsWith("http")) epHref else "$mainUrl$epHref"
+                    val epTitle = a.text().trim()
+                    episodes.add(newEpisode(epUrl) {
+                        name    = epTitle.ifEmpty { "Episode ${i + 1}" }
+                        episode = i + 1
+                    })
+                }
             }
-
-            // Jika tidak ada episode di sr-only, tambah satu episode dengan URL halaman itu sendiri
             if (episodes.isEmpty()) {
-                episodes.add(newEpisode(url) {
-                    name = title
-                })
+                episodes.add(newEpisode(url) { name = title })
             }
-
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot      = plot
@@ -152,26 +192,20 @@ class IdlixKuProvider : MainAPI() {
         val doc    = app.get(data, headers = ua).document
         val embeds = mutableListOf<String>()
 
-        // Cari iframe dari halaman
+        // Cari iframe
         doc.select("iframe[src], iframe[data-src]").forEach { iframe ->
             val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
             if (src.startsWith("http")) embeds.add(src)
         }
 
-        // Cari dari script (Next.js embed data)
+        // Cari embed URL dari script
         if (embeds.isEmpty()) {
-            doc.select("script").forEach { script ->
+            doc.select("script:not([src])").forEach { script ->
                 val text = script.data()
-                Regex("""["'](https://[^"']+(?:embed|player|watch)[^"']+)["']""")
-                    .findAll(text)
-                    .forEach { match ->
-                        val src = match.groupValues[1]
-                        if (!src.contains("googletagmanager") &&
-                            !src.contains("cloudflare") &&
-                            !src.contains("favicon")) {
-                            embeds.add(src)
-                        }
-                    }
+                Regex("""["'](https?://[^"']+(?:embed|player|stream|watch)[^"']*\.(?:m3u8|mp4|html)[^"']*)["']""")
+                    .findAll(text).forEach { embeds.add(it.groupValues[1]) }
+                Regex("""["'](https?://(?:doodstream|streamtape|filemoon|streamhub|upcloud|vidplay)[^"']+)["']""")
+                    .findAll(text).forEach { embeds.add(it.groupValues[1]) }
             }
         }
 
