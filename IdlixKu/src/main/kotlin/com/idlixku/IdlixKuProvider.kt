@@ -2,8 +2,7 @@ package com.idlixku
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import org.jsoup.nodes.Element
+import org.jsoup.nodes.Document
 
 class IdlixKuProvider : MainAPI() {
 
@@ -14,92 +13,132 @@ class IdlixKuProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes     = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
 
-    // Header agar tidak diblokir server
-    private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8",
-        "Referer" to mainUrl,
+    private val ua = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" to "id-ID,id;q=0.9",
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/trending/"      to "Trending",
-        "$mainUrl/movies/"        to "Film Terbaru",
-        "$mainUrl/tv/"            to "Serial TV",
-        "$mainUrl/drama/"         to "Drama Asia",
-        "$mainUrl/genre/action/"  to "Aksi",
-        "$mainUrl/genre/horror/"  to "Horor",
-        "$mainUrl/genre/comedy/"  to "Komedi",
-        "$mainUrl/genre/romance/" to "Romantis",
+        "$mainUrl/movie"           to "Film Terbaru",
+        "$mainUrl/series"          to "Serial TV",
+        "$mainUrl/genre/action"    to "Aksi",
+        "$mainUrl/genre/horror"    to "Horor",
+        "$mainUrl/genre/comedy"    to "Komedi",
+        "$mainUrl/genre/romance"   to "Romantis",
+        "$mainUrl/genre/animation" to "Animasi",
+        "$mainUrl/genre/thriller"  to "Thriller",
+        "$mainUrl/genre/drama"     to "Drama",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url  = if (page == 1) request.data else "${request.data.trimEnd('/')}/page/$page/"
-        val doc  = app.get(url, headers = headers).document
-        // Coba beberapa selector umum tema DooPlay/WordPress streaming Indonesia
-        val items = doc.select("article.item, article.post, div.item, div.poster")
-        val home  = items.mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(request.name, home)
-    }
-
-    private fun Element.toSearchResult(): SearchResponse? {
-        // Coba berbagai kombinasi selector untuk judul dan link
-        val a = selectFirst("h3 a, h2 a, .entry-title a, .data h3 a, a.lnk-blk")
-            ?: selectFirst("a[href*='${mainUrl}']")
-            ?: return null
-        val title  = a.text().trim().ifEmpty { selectFirst("img")?.attr("alt")?.trim() ?: return null }
-        val href   = a.attr("href").ifEmpty { return null }
-        // Coba berbagai selector poster
-        val poster = selectFirst("img.attachment-thumbnail, img.wp-post-image, div.poster img, img")
-            ?.let { it.attr("src").ifEmpty { it.attr("data-src") } }
-        val cls    = attr("class") + " " + parent()?.attr("class")
-        val isTV   = cls.contains("tvshows") || cls.contains("series") || cls.contains("drama") || href.contains("/tv/") || href.contains("/drama/")
-        return if (isTV)
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) { posterUrl = poster }
-        else
-            newMovieSearchResponse(title, href, TvType.Movie) { posterUrl = poster }
+        val url = if (page == 1) request.data else "${request.data}?page=$page"
+        val doc = app.get(url, headers = ua).document
+        val list = doc.parseItems()
+        return newHomePageResponse(request.name, list)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/?s=$query", headers = headers).document
-        return doc.select("article.item, article.post, div.item, div.result-item article")
-            .mapNotNull { it.toSearchResult() }
+        val doc = app.get("$mainUrl/search?q=$query", headers = ua).document
+        return doc.parseItems()
+    }
+
+    // Parse item dari section sr-only yang dirender server-side
+    private fun Document.parseItems(): List<SearchResponse> {
+        val results = mutableListOf<SearchResponse>()
+
+        // Ambil dari section aria-label (SSR content Next.js)
+        val section = selectFirst("section[aria-label]")
+        section?.select("li a")?.forEach { a ->
+            val href  = a.attr("href").trim()
+            val title = a.text().trim()
+            if (href.isEmpty() || title.isEmpty()) return@forEach
+            val fullUrl = if (href.startsWith("http")) href else "$mainUrl$href"
+            val isTV = href.contains("/series/")
+            val res = if (isTV)
+                newTvSeriesSearchResponse(title, fullUrl, TvType.TvSeries)
+            else
+                newMovieSearchResponse(title, fullUrl, TvType.Movie)
+            results.add(res)
+        }
+
+        // Fallback: cari dari JSON-LD schema
+        if (results.isEmpty()) {
+            select("script[type='application/ld+json']").forEach { script ->
+                val json = script.data()
+                val urlRegex = Regex(""""url"\s*:\s*"(https://z1\.idlixku\.com/(movie|series)/[^"]+)"""")
+                val nameRegex = Regex(""""name"\s*:\s*"([^"]+)"""")
+                val urls  = urlRegex.findAll(json).map { it.groupValues[1] }.toList()
+                val names = nameRegex.findAll(json).map { it.groupValues[1] }.toList()
+                urls.forEachIndexed { i, itemUrl ->
+                    val itemTitle = names.getOrNull(i + 1) ?: return@forEachIndexed
+                    val isTV = itemUrl.contains("/series/")
+                    val res = if (isTV)
+                        newTvSeriesSearchResponse(itemTitle, itemUrl, TvType.TvSeries)
+                    else
+                        newMovieSearchResponse(itemTitle, itemUrl, TvType.Movie)
+                    results.add(res)
+                }
+            }
+        }
+
+        return results.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc    = app.get(url, headers = headers).document
-        val title  = doc.selectFirst("h1.entry-title, div.data h1, h1")?.text()?.trim() ?: return null
-        val poster = doc.selectFirst("div.poster img, div.sheader img, img.wp-post-image")
-            ?.let { it.attr("src").ifEmpty { it.attr("data-src") } }
-        val plot   = doc.selectFirst("div.wp-content p, div[itemprop=description] p, div.sinopsis p")?.text()?.trim()
-        val year   = doc.selectFirst("span.year, a[href*='/year/']")?.text()?.trim()?.toIntOrNull()
-        val tags   = doc.select("div.sgeneros a, div.genres a").map { it.text() }
-        val epEls  = doc.select("ul.episodios li, #seasons .se-c .episodios li")
+        val doc   = app.get(url, headers = ua).document
+        val isTV  = url.contains("/series/")
 
-        return if (epEls.isEmpty()) {
+        // Ambil data dari JSON-LD
+        val jsonLd = doc.select("script[type='application/ld+json']").joinToString("") { it.data() }
+
+        // Title dari JSON-LD atau tag title
+        val title = Regex(""""name"\s*:\s*"([^"]+)"""").find(jsonLd)?.groupValues?.get(1)
+            ?: doc.title().substringBefore(" - ").substringBefore(" | ").trim()
+            ?: return null
+
+        // Poster dari JSON-LD image
+        val poster = Regex(""""image"\s*:\s*"([^"]+)"""").find(jsonLd)?.groupValues?.get(1)
+
+        // Description
+        val plot = Regex(""""description"\s*:\s*"([^"]+)"""").find(jsonLd)?.groupValues?.get(1)
+
+        // Year dari URL slug (misal: perfect-crown-2026 → 2026)
+        val year = Regex("""-(\d{4})$""").find(url.trimEnd('/').substringAfterLast("/"))
+            ?.groupValues?.get(1)?.toIntOrNull()
+
+        return if (!isTV) {
+            // Movie
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.plot      = plot
                 this.year      = year
-                this.tags      = tags
             }
         } else {
-            val episodes = epEls.mapNotNull { li ->
-                val href    = li.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-                val epTitle = li.selectFirst("div.episodiotitle a")?.text()
-                val num     = li.selectFirst("div.numerando")?.text()?.split("-")
-                val seasonNum  = num?.getOrNull(0)?.trim()?.toIntOrNull()
-                val episodeNum = num?.getOrNull(1)?.trim()?.toIntOrNull()
-                newEpisode(href) {
-                    name    = epTitle
-                    season  = seasonNum
-                    episode = episodeNum
-                }
+            // TV Series - coba ambil episode dari section sr-only
+            val episodes = mutableListOf<Episode>()
+            val section  = doc.selectFirst("section[aria-label]")
+            section?.select("li a[href*='/episode/'], li a[href*='/watch/']")?.forEachIndexed { i, a ->
+                val epHref  = a.attr("href")
+                val epTitle = a.text().trim()
+                val fullEpUrl = if (epHref.startsWith("http")) epHref else "$mainUrl$epHref"
+                episodes.add(newEpisode(fullEpUrl) {
+                    name    = epTitle.ifEmpty { "Episode ${i + 1}" }
+                    episode = i + 1
+                })
             }
+
+            // Jika tidak ada episode di sr-only, tambah satu episode dengan URL halaman itu sendiri
+            if (episodes.isEmpty()) {
+                episodes.add(newEpisode(url) {
+                    name = title
+                })
+            }
+
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot      = plot
                 this.year      = year
-                this.tags      = tags
             }
         }
     }
@@ -110,44 +149,33 @@ class IdlixKuProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val doc    = app.get(data, headers = headers).document
+        val doc    = app.get(data, headers = ua).document
         val embeds = mutableListOf<String>()
 
-        // Method 1: DooPlay AJAX (tema paling umum Indonesia)
-        doc.select("ul#playeroptionsul li, ul.dooplay_player_option li").forEach { li ->
-            val post = li.attr("data-post")
-            val nume = li.attr("data-nume")
-            val type = li.attr("data-type")
-            if (post.isNotEmpty() && nume.isNotEmpty()) {
-                try {
-                    val res = app.post(
-                        "$mainUrl/wp-admin/admin-ajax.php",
-                        data = mapOf(
-                            "action" to "doo_player_ajax",
-                            "post"   to post,
-                            "nume"   to nume,
-                            "type"   to type,
-                        ),
-                        headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
-                    ).text
-                    val embedUrl = tryParseJson<EmbedData>(res)?.embed_url
-                        ?: Regex("""embed_url["']?\s*:\s*["']([^"']+)""").find(res)?.groupValues?.getOrNull(1)
-                    embedUrl?.replace("\\", "")?.let { if (it.startsWith("http")) embeds.add(it) }
-                } catch (_: Exception) {}
-            }
+        // Cari iframe dari halaman
+        doc.select("iframe[src], iframe[data-src]").forEach { iframe ->
+            val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
+            if (src.startsWith("http")) embeds.add(src)
         }
 
-        // Method 2: Cari iframe langsung
+        // Cari dari script (Next.js embed data)
         if (embeds.isEmpty()) {
-            doc.select("iframe[src], iframe[data-src]").forEach { iframe ->
-                val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
-                if (src.startsWith("http")) embeds.add(src)
+            doc.select("script").forEach { script ->
+                val text = script.data()
+                Regex("""["'](https://[^"']+(?:embed|player|watch)[^"']+)["']""")
+                    .findAll(text)
+                    .forEach { match ->
+                        val src = match.groupValues[1]
+                        if (!src.contains("googletagmanager") &&
+                            !src.contains("cloudflare") &&
+                            !src.contains("favicon")) {
+                            embeds.add(src)
+                        }
+                    }
             }
         }
 
         embeds.distinct().forEach { loadExtractor(it, data, subtitleCallback, callback) }
         return embeds.isNotEmpty()
     }
-
-    data class EmbedData(val embed_url: String? = null)
 }
